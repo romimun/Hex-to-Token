@@ -1,0 +1,13 @@
+{
+  "name": "Variable Color Auto Binder",
+  "id": "variable-color-auto-binder",
+  "api": "1.0.0",
+  "editorType": ["figma"],
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"]
+  },
+  "permissions": ["teamlibrary"]
+}
