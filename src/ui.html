@@ -268,6 +268,9 @@
       outline-offset: -2px;
     }
 
+    .noMatchRowWrap{ display: flex; flex-direction: column; }
+    .inlineCandidates{ background-color: #E7EBF2; }
+
     /* Suggestions panel */
     .suggestPanel{
       margin-top: 10px;
@@ -452,7 +455,7 @@
             </div>
           </div>
 
-          <div id="suggestPanel" class="suggestPanel" style="display:none;">
+          <div id="suggestPanel" class="suggestPanel" style="display:none;" class="suggestPanel" style="display:none;">
             <div class="suggestHeader">
               <div class="suggestTitle">Token candidates</div>
               <div class="suggestTarget" id="suggestTarget">—</div>
@@ -480,9 +483,9 @@
       useGroupFilters: true,
       matchedColors: [],   // [{hex,count,variableId,variableName}]
       noMatchColors: [],   // [{hex,count}]
-      selectedNoMatchHex: null,
-      suggestions: [],     // [{hex, name, variableId}]
-      selectedSuggestionId: null
+      expandedNoMatchHex: null,   // which no-match row is expanded (accordion)
+      suggestionsCache: {}, // { [hex]: [{ variableId, name, hex }] }
+      loadingSuggestionsHex: null
     };
 
     // ---------- helpers ----------
@@ -556,9 +559,12 @@
       }
 
       for (const it of state.noMatchColors){
+        const wrap = document.createElement("div");
+        wrap.className = "noMatchRowWrap";
+
         const row = document.createElement("div");
         row.className = "item clickable";
-        if (state.selectedNoMatchHex === it.hex) row.classList.add("selected");
+        if (state.expandedNoMatchHex === it.hex) row.classList.add("selected");
 
         const chip = document.createElement("div");
         chip.className = "chip";
@@ -582,85 +588,86 @@
         row.appendChild(count);
 
         row.onclick = () => {
-          state.selectedNoMatchHex = it.hex;
-          state.selectedSuggestionId = null;
-          renderNoMatch();
-
-          // request suggestions from plugin
-          parent.postMessage({
-            pluginMessage: {
-              type: "getSuggestions",
-              hex: it.hex,
-              mode: state.mode,
-              collection: state.collection,
-              useGroupFilters: state.useGroupFilters
+          if (state.expandedNoMatchHex === it.hex) {
+            state.expandedNoMatchHex = null;
+          } else {
+            state.expandedNoMatchHex = it.hex;
+            if (!state.suggestionsCache[it.hex]) {
+              state.loadingSuggestionsHex = it.hex;
+              parent.postMessage({
+                pluginMessage: {
+                  type: "getSuggestions",
+                  hex: it.hex,
+                  mode: state.mode,
+                  collection: state.collection,
+                  useGroupFilters: state.useGroupFilters
+                }
+              }, "*");
             }
-          }, "*");
+          }
+          renderNoMatch();
         };
 
-        list.appendChild(row);
-      }
-    }
+        const inlineCandidates = document.createElement("div");
+        inlineCandidates.className = "inlineCandidates";
+        inlineCandidates.style.display = state.expandedNoMatchHex === it.hex ? "block" : "none";
 
-    function renderSuggestions(){
-      const panel = $("suggestPanel");
-      const grid = $("suggestGrid");
-      const target = $("suggestTarget");
+        if (state.expandedNoMatchHex === it.hex) {
+          if (state.loadingSuggestionsHex === it.hex && !state.suggestionsCache[it.hex]) {
+            inlineCandidates.appendChild(emptyRow("Loading..."));
+          } else if (state.suggestionsCache[it.hex]) {
+            const items = state.suggestionsCache[it.hex];
+            if (!items.length) {
+              inlineCandidates.appendChild(emptyRow("No candidates found"));
+            } else {
+              for (const s of items) {
+                const itemRow = document.createElement("div");
+                itemRow.className = "item clickable";
 
-      if (!state.selectedNoMatchHex){
-        panel.style.display = "none";
-        return;
-      }
+                const itemChip = document.createElement("div");
+                itemChip.className = "chip";
+                itemChip.style.background = "#" + (s.hex || "000");
 
-      panel.style.display = "block";
-      target.textContent = "#" + state.selectedNoMatchHex.toUpperCase();
-      grid.innerHTML = "";
+                const itemRowText = document.createElement("div");
+                itemRowText.className = "rowText";
 
-      if (!state.suggestions || !state.suggestions.length){
-        grid.appendChild(emptyRow("No candidates found"));
-        return;
-      }
+                const itemName = document.createElement("div");
+                itemName.className = "mono token";
+                itemName.textContent = s.name ?? "—";
 
-      for (const s of state.suggestions){
-        const card = document.createElement("div");
-        card.className = "swatch";
-        if (state.selectedSuggestionId === s.variableId) card.classList.add("sel");
+                const itemHex = document.createElement("div");
+                itemHex.className = "mono hex";
+                itemHex.textContent = (s.hex || "").toUpperCase();
 
-        const top = document.createElement("div");
-        top.className = "swatchTop";
+                itemRowText.appendChild(itemName);
+                itemRowText.appendChild(itemHex);
 
-        const chip = document.createElement("div");
-        chip.className = "swatchChip";
-        chip.style.background = "#" + s.hex;
+                itemRow.appendChild(itemChip);
+                itemRow.appendChild(itemRowText);
 
-        const hex = document.createElement("div");
-        hex.className = "swatchHex";
-        hex.textContent = s.hex.toUpperCase();
+                itemRow.onclick = (e) => {
+                  e.stopPropagation();
+                  parent.postMessage({
+                    pluginMessage: { type: "applyTokenToColor", hex: it.hex, variableId: s.variableId }
+                  }, "*");
+                };
+                inlineCandidates.appendChild(itemRow);
+              }
+            }
+          } else {
+            inlineCandidates.appendChild(emptyRow("Loading..."));
+          }
+        }
 
-        top.appendChild(chip);
-        top.appendChild(hex);
-
-        const name = document.createElement("div");
-        name.className = "swatchName";
-        name.textContent = s.name ?? "—";
-
-        card.appendChild(top);
-        card.appendChild(name);
-
-        card.onclick = () => {
-          state.selectedSuggestionId = s.variableId;
-          renderSuggestions();
-          // v1: selection only (no apply automatically)
-        };
-
-        grid.appendChild(card);
+        wrap.appendChild(row);
+        wrap.appendChild(inlineCandidates);
+        list.appendChild(wrap);
       }
     }
 
     function renderAll(){
       renderMatched();
       renderNoMatch();
-      renderSuggestions();
     }
 
     // ---------- UI events ----------
@@ -688,13 +695,7 @@
 
     $("applyBtn").addEventListener("click", () => {
       parent.postMessage({
-        pluginMessage: {
-          type: "apply",
-          // apply matched by default
-          // if user selected a no-match + suggestion, plugin can optionally apply that mapping too
-          selectedNoMatchHex: state.selectedNoMatchHex,
-          selectedSuggestionId: state.selectedSuggestionId
-        }
+        pluginMessage: { type: "apply" }
       }, "*");
     });
 
@@ -706,22 +707,20 @@
       if (msg.type === "scanUI") {
         state.matchedColors = msg.matchedColors || [];
         state.noMatchColors = msg.noMatchColors || [];
-        // keep selection if still exists
-        if (state.selectedNoMatchHex && !state.noMatchColors.some(x => x.hex === state.selectedNoMatchHex)){
-          state.selectedNoMatchHex = null;
-          state.suggestions = [];
-          state.selectedSuggestionId = null;
+        if (state.expandedNoMatchHex && !state.noMatchColors.some(x => x.hex === state.expandedNoMatchHex)) {
+          state.expandedNoMatchHex = null;
         }
         renderAll();
         return;
       }
 
       if (msg.type === "suggestions") {
-        // expected:
         // { type:"suggestions", hex:"FF5733", items:[{variableId,name,hex}, ...] }
-        if (msg.hex !== state.selectedNoMatchHex) return;
-        state.suggestions = msg.items || [];
-        renderSuggestions();
+        if (msg.hex != null) {
+          state.suggestionsCache[msg.hex] = msg.items || [];
+        }
+        state.loadingSuggestionsHex = null;
+        renderNoMatch();
         return;
       }
 
