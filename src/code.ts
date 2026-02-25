@@ -7,14 +7,7 @@ import { findVariableCollectionByName, getAvailableCollectionNames } from "./var
 
 type ModeName = "Light" | "Dark";
 
-/** 그룹 필터 prefix: Color 우선, 그 다음 Black (순서 유지) */
-const GROUP_FILTER_PREFIXES = ["Color/", "Black/"];
-
-function matchesGroupFilter(variableName: string, prefixes: string[] = GROUP_FILTER_PREFIXES): boolean {
-  return prefixes.some((p) => variableName.trim().startsWith(p));
-}
-
-/** 단일 그룹 prefix로만 매칭 (예: "Color/" 만) */
+/** 단일 그룹 prefix로만 매칭 (예: "Color/") */
 function matchesPrefix(variableName: string, prefix: string): boolean {
   return variableName.trim().startsWith(prefix);
 }
@@ -84,17 +77,12 @@ function collectNodes(node: SceneNode): (SceneNode & { fills: readonly Paint[] }
   return out;
 }
 
-interface CollectionColorMapOptions {
-  useGroupFilters?: boolean;
-  groupPrefixes?: string[];
-}
-
+/** groupPrefixes: null 또는 빈 배열 = 전체 변수, ["Color/","Black/"] 등 = 해당 prefix들 중 하나라도 일치하면 포함 */
 async function getCollectionColorMap(
   collectionName: string,
   mode: ModeName,
-  options: CollectionColorMapOptions = {}
+  groupPrefixes: string[] | null = null
 ): Promise<Map<string, { variable: Variable; name: string }>> {
-  const { useGroupFilters = false, groupPrefixes = GROUP_FILTER_PREFIXES } = options;
   const found = await findVariableCollectionByName(collectionName);
   if (!found || found.type === "library") return new Map();
   const collection = found.collection;
@@ -102,55 +90,34 @@ async function getCollectionColorMap(
   const modeId = modeEntry?.modeId ?? collection.modes[0]?.modeId;
   if (modeId == null) return new Map();
 
+  const usePrefixes = groupPrefixes != null && groupPrefixes.length > 0;
   const map = new Map<string, { variable: Variable; name: string }>();
-  if (!useGroupFilters) {
-    for (const variableId of collection.variableIds) {
-      const variable = await figma.variables.getVariableByIdAsync(variableId);
-      if (!variable || variable.resolvedType !== "COLOR") continue;
-      const value = variable.valuesByMode[modeId];
-      if (value && typeof value === "object" && "r" in value) {
-        const v = value as { r: number; g: number; b: number; a?: number };
-        const a = v.a ?? 1;
-        const key = rgbOpacityKey(v.r, v.g, v.b, a);
-        map.set(key, { variable, name: variable.name });
-      }
-    }
-    return map;
-  }
-  // Color 우선, 동일 키면 Black은 무시 (Matched 판정 시 Color 그룹 최우선)
-  const order = groupPrefixes.length >= 2 ? [groupPrefixes[0], groupPrefixes[1]] : groupPrefixes;
-  for (const prefix of order) {
-    for (const variableId of collection.variableIds) {
-      const variable = await figma.variables.getVariableByIdAsync(variableId);
-      if (!variable || variable.resolvedType !== "COLOR") continue;
-      if (!matchesPrefix(variable.name, prefix)) continue;
-      const value = variable.valuesByMode[modeId];
-      if (value && typeof value === "object" && "r" in value) {
-        const v = value as { r: number; g: number; b: number; a?: number };
-        const a = v.a ?? 1;
-        const key = rgbOpacityKey(v.r, v.g, v.b, a);
-        if (!map.has(key)) map.set(key, { variable, name: variable.name });
-      }
+  for (const variableId of collection.variableIds) {
+    const variable = await figma.variables.getVariableByIdAsync(variableId);
+    if (!variable || variable.resolvedType !== "COLOR") continue;
+    if (usePrefixes && !groupPrefixes.some((p) => matchesPrefix(variable.name, p))) continue;
+    const value = variable.valuesByMode[modeId];
+    if (value && typeof value === "object" && "r" in value) {
+      const v = value as { r: number; g: number; b: number; a?: number };
+      const a = v.a ?? 1;
+      const key = rgbOpacityKey(v.r, v.g, v.b, a);
+      map.set(key, { variable, name: variable.name });
     }
   }
   return map;
 }
 
-/** 변수 목록 캐시: key → list (그룹별로 다른 키 사용) */
-const variableListCacheMap = new Map<string, { variableId: string; variableName: string; r: number; g: number; b: number }[]>();
+/** 변수 목록 캐시: key → list */
+const variableListCacheMap = new Map<string, { variableId: string; variableName: string; r: number; g: number; b: number; a: number }[]>();
 
-/**
- * 그룹 필터 시 groupPrefixFilter 로 특정 prefix만 사용 (예: ["Color/"] 또는 ["Black/"]).
- * null 이면 useGroupFilters ? 전체 그룹 : 필터 없음.
- */
+/** groupPrefixes: null 또는 빈 배열 = 전체 변수, ["Color/","Black/"] 등 = 해당 prefix들 중 하나라도 일치하면 포함 */
 async function getCollectionVariableList(
   collectionName: string,
   mode: ModeName,
-  useGroupFilters: boolean,
-  groupPrefixFilter: string[] | null = null
-): Promise<{ variableId: string; variableName: string; r: number; g: number; b: number }[]> {
-  const prefixKey = groupPrefixFilter ? groupPrefixFilter.join(",") : (useGroupFilters ? "all" : "none");
-  const key = `${collectionName}|${mode}|${useGroupFilters}|${prefixKey}`;
+  groupPrefixes: string[] | null
+): Promise<{ variableId: string; variableName: string; r: number; g: number; b: number; a: number }[]> {
+  const prefixKey = groupPrefixes != null && groupPrefixes.length > 0 ? [...groupPrefixes].sort().join(",") : "all";
+  const key = `${collectionName}|${mode}|${prefixKey}`;
   const cached = variableListCacheMap.get(key);
   if (cached) return cached;
 
@@ -161,29 +128,49 @@ async function getCollectionVariableList(
   const modeId = modeEntry?.modeId ?? collection.modes[0]?.modeId;
   if (modeId == null) return [];
 
-  const list: { variableId: string; variableName: string; r: number; g: number; b: number }[] = [];
-  const prefixesToMatch = groupPrefixFilter ?? (useGroupFilters ? GROUP_FILTER_PREFIXES : null);
-
+  const usePrefixes = groupPrefixes != null && groupPrefixes.length > 0;
+  const list: { variableId: string; variableName: string; r: number; g: number; b: number; a: number }[] = [];
   for (const variableId of collection.variableIds) {
     const variable = await figma.variables.getVariableByIdAsync(variableId);
     if (!variable || variable.resolvedType !== "COLOR") continue;
-    if (prefixesToMatch && !prefixesToMatch.some((p) => matchesPrefix(variable.name, p))) continue;
+    if (usePrefixes && !groupPrefixes.some((p) => matchesPrefix(variable.name, p))) continue;
     const value = variable.valuesByMode[modeId];
     if (value && typeof value === "object" && "r" in value) {
-      const v = value as { r: number; g: number; b: number };
-      list.push({ variableId: variable.id, variableName: variable.name, r: v.r, g: v.g, b: v.b });
+      const v = value as { r: number; g: number; b: number; a?: number };
+      list.push({ variableId: variable.id, variableName: variable.name, r: v.r, g: v.g, b: v.b, a: v.a ?? 1 });
     }
   }
   variableListCacheMap.set(key, list);
   return list;
 }
 
+/** 선택된 컬렉션의 COLOR 변수 이름에서 Group/Token 패턴(/ 포함)이 있으면 그룹 목록 추출. 변수 등장 순서(첫 등장)대로 유지. */
+async function getGroupsFromCollection(collectionName: string): Promise<string[]> {
+  const found = await findVariableCollectionByName(collectionName);
+  if (!found || found.type === "library") return [];
+  const collection = found.collection;
+  const groups: string[] = [];
+  const seen = new Set<string>();
+  for (const variableId of collection.variableIds) {
+    const variable = await figma.variables.getVariableByIdAsync(variableId);
+    if (!variable || variable.resolvedType !== "COLOR") continue;
+    const idx = variable.name.indexOf("/");
+    if (idx <= 0) continue;
+    const groupName = variable.name.slice(0, idx).trim();
+    if (groupName && !seen.has(groupName)) {
+      seen.add(groupName);
+      groups.push(groupName);
+    }
+  }
+  return groups;
+}
+
 /** 후보 계산: 거리 정렬 후 상위 limit 개 (near match, opacity 제외) */
 function computeCandidates(
-  list: { variableId: string; variableName: string; r: number; g: number; b: number }[],
+  list: { variableId: string; variableName: string; r: number; g: number; b: number; a: number }[],
   targetRgb: { r: number; g: number; b: number },
   limit: number
-): { variableId: string; variableName: string; hex: string }[] {
+): { variableId: string; variableName: string; hex: string; alpha: number }[] {
   const withDistance = list.map((v) => ({
     ...v,
     hex: rgbToHexStr(v.r, v.g, v.b),
@@ -193,7 +180,7 @@ function computeCandidates(
     if (Math.abs(a.distance - b.distance) < 1e-6) return a.variableName.localeCompare(b.variableName);
     return a.distance - b.distance;
   });
-  return withDistance.slice(0, limit).map(({ variableId, variableName, hex }) => ({ variableId, variableName, hex }));
+  return withDistance.slice(0, limit).map(({ variableId, variableName, hex, a }) => ({ variableId, variableName, hex, alpha: a }));
 }
 
 function isSolidUnbound(
@@ -256,32 +243,31 @@ function scanNodes(
 
 interface MatchedColorItem {
   hex: string;
+  alpha?: number;
   tokenName: string;
   variableId: string;
 }
 
 interface NoMatchColorItem {
   hex: string;
+  alpha?: number;
 }
 
 async function runScan(
   collectionName: string,
   mode: ModeName,
-  options: { useGroupFilters?: boolean } = {}
+  options: { groupPrefixes?: string[] | null } = {}
 ): Promise<{ items: ScanItem[]; matchedColors: MatchedColorItem[]; noMatchColors: NoMatchColorItem[]; totalScanned: number; error?: string }> {
   try {
-    const colorMap = await getCollectionColorMap(collectionName, mode, {
-      useGroupFilters: options.useGroupFilters ?? false,
-    });
+    const groupPrefixes = options.groupPrefixes != null && options.groupPrefixes.length > 0 ? options.groupPrefixes : null;
+    const colorMap = await getCollectionColorMap(collectionName, mode, groupPrefixes);
     if (colorMap.size === 0) {
       return {
         items: [],
         matchedColors: [],
         noMatchColors: [],
         totalScanned: 0,
-        error: options.useGroupFilters
-          ? `"${collectionName}" 컬렉션에서 필터(Color, Black)에 맞는 COLOR 변수가 없습니다.`
-          : `"${collectionName}" 컬렉션을 찾을 수 없거나 해당 모드에 COLOR 변수가 없습니다.`,
+        error: `"${collectionName}" 컬렉션을 찾을 수 없거나 해당 모드에 COLOR 변수가 없습니다.`,
       };
     }
 
@@ -290,23 +276,31 @@ async function runScan(
       selection.length > 0 ? selection.flatMap((n) => collectNodes(n)) : collectNodes(figma.currentPage);
     const items = scanNodes(nodes, colorMap);
 
-    const matchedByHex = new Map<string, { tokenName: string; variableId: string }>();
-    const noMatchHexSet = new Set<string>();
+    const matchedByKey = new Map<string, { tokenName: string; variableId: string }>();
+    const noMatchKeySet = new Set<string>();
     for (const item of items) {
       const hex = rgbToHexStr(item.currentColor.r, item.currentColor.g, item.currentColor.b);
+      const a = roundAlpha(item.opacity);
+      const key = hex + "|" + a;
       if (item.matchVariableId != null && item.matchVariableName != null) {
-        if (!matchedByHex.has(hex)) matchedByHex.set(hex, { tokenName: item.matchVariableName, variableId: item.matchVariableId });
+        if (!matchedByKey.has(key)) matchedByKey.set(key, { tokenName: item.matchVariableName, variableId: item.matchVariableId });
       } else {
-        noMatchHexSet.add(hex);
+        noMatchKeySet.add(key);
       }
     }
 
-    const matchedColors: MatchedColorItem[] = Array.from(matchedByHex.entries()).map(([hex, v]) => ({
-      hex,
-      tokenName: v.tokenName,
-      variableId: v.variableId,
-    }));
-    const noMatchColors: NoMatchColorItem[] = Array.from(noMatchHexSet).sort().map((hex) => ({ hex }));
+    const matchedColors: MatchedColorItem[] = Array.from(matchedByKey.entries()).map(([key, v]) => {
+      const [hex, aStr] = key.split("|");
+      const alpha = aStr != null ? parseFloat(aStr) : 1;
+      return { hex, alpha: alpha < 1 ? alpha : undefined, tokenName: v.tokenName, variableId: v.variableId };
+    });
+    const noMatchColors: NoMatchColorItem[] = Array.from(noMatchKeySet)
+      .sort()
+      .map((key) => {
+        const [hex, aStr] = key.split("|");
+        const alpha = aStr != null ? parseFloat(aStr) : 1;
+        return { hex, alpha: alpha < 1 ? alpha : undefined };
+      });
 
     return {
       items,
@@ -410,13 +404,15 @@ async function applyBindingsToItems(items: ScanItem[]): Promise<ApplyResult> {
   return result;
 }
 
-/** No match 색상(hex)에 대해 토큰 일괄 바인딩 */
-async function applyTokenToColor(hex: string, variableId: string): Promise<ApplyResult> {
+/** No match 색상(hex, alpha)에 대해 토큰 일괄 바인딩 */
+async function applyTokenToColor(hex: string, variableId: string, alpha?: number): Promise<ApplyResult> {
   const targetHex = hex.replace(/^#/, "").trim();
   const itemsToBind = lastScanItems.filter((item) => {
     if (item.matchVariableId != null) return false;
     const h = rgbToHexStr(item.currentColor.r, item.currentColor.g, item.currentColor.b);
-    return h === targetHex;
+    if (h !== targetHex) return false;
+    if (alpha != null && Math.abs(roundAlpha(item.opacity) - roundAlpha(alpha)) > 1e-6) return false;
+    return true;
   });
   if (itemsToBind.length === 0) return { appliedCount: 0, skippedCount: 0, failedCount: 0, failedReasons: [] };
 
@@ -495,6 +491,28 @@ figma.ui.onmessage = async (msg: any) => {
     return;
   }
 
+  // ===== GET GROUPS =====
+  if (msg.type === "getGroups") {
+    const collectionName = msg.collectionName ?? msg.collection;
+    if (!collectionName) {
+      figma.ui.postMessage({ type: "groups", collectionName: collectionName || "", groups: [], modes: [] });
+      return;
+    }
+    const found = await findVariableCollectionByName(collectionName);
+    const groups = found && found.type !== "library" ? await getGroupsFromCollection(collectionName) : [];
+    const modes: string[] = [];
+    if (found && found.type !== "library") {
+      const collection = found.collection;
+      for (const m of collection.modes) {
+        const name = (m.name || "").trim();
+        const lower = name.toLowerCase();
+        if ((lower === "light" || lower === "dark") && !modes.includes(name)) modes.push(name);
+      }
+    }
+    figma.ui.postMessage({ type: "groups", collectionName, groups, modes });
+    return;
+  }
+
   // ===== SCAN =====
   if (msg.type === "scan") {
     const collectionName = msg.collectionName ?? msg.collection;
@@ -507,9 +525,8 @@ figma.ui.onmessage = async (msg: any) => {
 
     variableListCacheMap.clear();
 
-    const result = await runScan(collectionName, mode, {
-      useGroupFilters: msg.useGroupFilters === true,
-    });
+    const groupPrefixes = Array.isArray(msg.groupPrefixes) && msg.groupPrefixes.length > 0 ? msg.groupPrefixes : null;
+    const result = await runScan(collectionName, mode, { groupPrefixes });
 
     lastScanItems = result.items ?? [];
 
@@ -525,12 +542,14 @@ figma.ui.onmessage = async (msg: any) => {
       summary,
       matchedColors: result.matchedColors.map((m) => ({
         hex: m.hex,
+        alpha: m.alpha,
         count: 1,
         variableId: m.variableId,
         variableName: m.tokenName,
       })),
       noMatchColors: result.noMatchColors.map((n) => ({
         hex: n.hex,
+        alpha: n.alpha,
         count: 1,
       })),
       error: result.error,
@@ -551,11 +570,8 @@ figma.ui.onmessage = async (msg: any) => {
     const targetRgb = parseHexToRgb(hexNorm);
     if (!targetRgb) return;
 
-    const list = await getCollectionVariableList(
-      collectionName,
-      mode,
-      msg.useGroupFilters === true
-    );
+    const groupPrefixes = Array.isArray(msg.groupPrefixes) && msg.groupPrefixes.length > 0 ? msg.groupPrefixes : null;
+    const list = await getCollectionVariableList(collectionName, mode, groupPrefixes);
 
     const candidates = computeCandidates(list, targetRgb, 12);
 
@@ -566,6 +582,7 @@ figma.ui.onmessage = async (msg: any) => {
         variableId: c.variableId,
         name: c.variableName,
         hex: c.hex,
+        alpha: c.alpha,
       })),
     });
 
@@ -580,11 +597,8 @@ figma.ui.onmessage = async (msg: any) => {
         figma.ui.postMessage({ type: "candidatesResult", hex: hexNorm, candidates: [], error: "Invalid HEX" });
         return;
       }
-      const list = await getCollectionVariableList(
-        msg.collectionName,
-        msg.mode,
-        msg.useGroupFilters === true
-      );
+      const groupPrefixes = Array.isArray(msg.groupPrefixes) && msg.groupPrefixes.length > 0 ? msg.groupPrefixes : null;
+      const list = await getCollectionVariableList(msg.collectionName, msg.mode, groupPrefixes);
       const withDistance = list.map((v) => ({
         ...v,
         hex: rgbToHexStr(v.r, v.g, v.b),
@@ -594,7 +608,7 @@ figma.ui.onmessage = async (msg: any) => {
         if (Math.abs(a.distance - b.distance) < 1e-6) return a.variableName.localeCompare(b.variableName);
         return a.distance - b.distance;
       });
-      const top = withDistance.slice(0, 12).map(({ variableId, variableName, hex }) => ({ variableId, variableName, hex }));
+      const top = withDistance.slice(0, 12).map(({ variableId, variableName, hex, a }) => ({ variableId, variableName, hex, alpha: a }));
       figma.ui.postMessage({ type: "candidatesResult", hex: hexNorm, candidates: top });
     } catch (e) {
       figma.ui.postMessage({
@@ -609,7 +623,7 @@ figma.ui.onmessage = async (msg: any) => {
 
   if (msg.type === "applyTokenToColor" && msg.hex != null && msg.variableId != null) {
     try {
-      const result = await applyTokenToColor(msg.hex, msg.variableId);
+      const result = await applyTokenToColor(msg.hex, msg.variableId, msg.alpha);
       figma.notify(`Applied ${result.appliedCount}, Skipped ${result.skippedCount}, Failed ${result.failedCount}`);
       figma.ui.postMessage({ type: "applyTokenToColorResult", ...result });
     } catch (e) {

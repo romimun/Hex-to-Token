@@ -13,7 +13,6 @@
       --card: #F3F4F6;
       --line: #E5E7EB;
       --primary: #2B7FFF;
-      --radius-app: 24px;
       --radius-card: 4px;
       --radius-chip: 6px;
       --shadow: 0px 20px 25px -5px rgba(0, 0, 0, 0.1), 0px 8px 10px -6px rgba(0, 0, 0, 0.1);
@@ -74,7 +73,11 @@
     .form{
       display:flex;
       flex-direction:column;
-      gap: 10px;
+      gap: 14px;
+    }
+
+     #groupList{
+   gap: 6px;
     }
 
     .row{
@@ -98,17 +101,14 @@
       border: 0;
       border-radius: var(--radius-card);
       background: var(--card);
-      padding: 0 10px;
+      padding: 0 32px 0 10px;
       font-size: 12px;
       outline: none;
       appearance: none;
-      background-image:
-        linear-gradient(45deg, transparent 50%, var(--subtle) 50%),
-        linear-gradient(135deg, var(--subtle) 50%, transparent 50%);
-      background-position:
-        calc(100% - 14px) calc(50% - 2px),
-        calc(100% - 9px)  calc(50% - 2px);
-      background-size: 6px 6px, 6px 6px;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M4 6L8 10L12 6' stroke='%236A7282' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-position: right 12px center;
       background-repeat: no-repeat;
     }
     select.select:focus{
@@ -162,7 +162,7 @@
     }
 
     .divider{
-      margin: 14px 0;
+      margin: 20px 0;
       height: 1px;
       background: var(--line);
     }
@@ -170,13 +170,13 @@
     .colors{
       display:flex;
       flex-direction:column;
-      gap: 14px;
+      gap: 12px;
     }
 
     .block{
       display:flex;
       flex-direction:column;
-      gap: 6px;
+      gap: 12px;
     }
     .block-title{
       font-weight: 600;
@@ -215,6 +215,10 @@
       background: #000;
       flex: none;
     }
+    .chip.chipAlpha{
+      background-size: auto, 8px 8px;
+      background-repeat: repeat, repeat;
+    }
 
     .mono{
       font-family: var(--mono);
@@ -235,9 +239,17 @@
       flex: 1;
     }
     .hex{
-      width: 64px;
+      width: 110px;
       flex:none;
       text-transform: uppercase;
+    }
+    .hex.hexApplied{
+      width: auto;
+      min-width: 0;
+      flex: 1;
+      overflow: visible;
+      text-overflow: clip;
+      white-space: normal;
     }
     .count{
       font-family: var(--mono);
@@ -408,23 +420,22 @@
           <div class="row">
             <div class="label">Collection</div>
             <select id="collection" class="select">
-              <option value="Semantic">Semantic</option>
-              <option value="Primitive">Primitive</option>
+              <option value="">Loading...</option>
             </select>
           </div>
 
-          <div class="row" style="align-items:flex-start;">
-            <div class="label" style="padding-top:8px;">Mode</div>
+          <div id="groupRowWrap" class="row" style="display:none; align-items:flex-start;">
+            <div class="label" style="padding-top:0px;">Group</div>
+            <div id="groupList" class="form"></div>
+          </div>
+
+          <div id="modeRowWrap" class="row" style="align-items:center; display:none;">
+            <div class="label">Mode</div>
             <div class="segmented" role="tablist" aria-label="Mode">
               <button id="modeLight" class="seg on" type="button">Light</button>
               <button id="modeDark" class="seg" type="button">Dark</button>
             </div>
           </div>
-
-          <label class="check">
-            <input id="useGroupFilters" type="checkbox" checked />
-            <span>Use group filters (Color, Black only)</span>
-          </label>
         </div>
 
       </section>
@@ -455,7 +466,7 @@
             </div>
           </div>
 
-          <div id="suggestPanel" class="suggestPanel" style="display:none;" class="suggestPanel" style="display:none;">
+          <div id="suggestPanel" class="suggestPanel" style="display:none;">
             <div class="suggestHeader">
               <div class="suggestTitle">Token candidates</div>
               <div class="suggestTarget" id="suggestTarget">—</div>
@@ -479,14 +490,48 @@
     // ---------- state ----------
     const state = {
       mode: "Light",
-      collection: "Semantic",
-      useGroupFilters: true,
+      collection: "",
+      hasGroups: false,
+      groups: [],
+      selectedGroups: [],
+      availableModes: [],   // ["Light"], ["Dark"], or ["Light","Dark"] from collection.modes
       matchedColors: [],   // [{hex,count,variableId,variableName}]
-      noMatchColors: [],   // [{hex,count}]
-      expandedNoMatchHex: null,   // which no-match row is expanded (accordion)
-      suggestionsCache: {}, // { [hex]: [{ variableId, name, hex }] }
-      loadingSuggestionsHex: null
+      noMatchColors: [],   // [{hex,alpha?,count}]
+      expandedNoMatchKey: null,
+      suggestionsCache: {},
+      loadingSuggestionsKey: null,
+      appliedNoMatchMap: {},   // { [hex]: { name, hex } } after candidate apply success
+      pendingApply: null       // { hex, name, tokenHex } while waiting for applyTokenToColorResult
     };
+
+    const CHECKERBOARD_DATA_URI = "url(\"data:image/svg+xml;utf8,<svg width='8' height='8' xmlns='http://www.w3.org/2000/svg'><rect width='4' height='4' fill='%23E5E7EB'/><rect x='4' y='4' width='4' height='4' fill='%23E5E7EB'/><rect x='4' y='0' width='4' height='4' fill='%23FFFFFF'/><rect x='0' y='4' width='4' height='4' fill='%23FFFFFF'/></svg>\")";
+
+    function formatHexDisplay(hex, alpha){
+      const h = (hex || "").replace(/^#/, "").toUpperCase();
+      if (alpha == null || alpha >= 0.995) return "#" + h;
+      return "#" + h + " / A" + Math.round(alpha * 100);
+    }
+
+    function hexToRgb255(hex){
+      const s = (hex || "").replace(/^#/, "").trim();
+      if (s.length !== 6) return { r: 0, g: 0, b: 0 };
+      const n = parseInt(s, 16);
+      if (isNaN(n)) return { r: 0, g: 0, b: 0 };
+      return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
+    }
+
+    function setChipStyle(chip, hex, alpha){
+      if (alpha != null && alpha < 0.995) {
+        const rgb = hexToRgb255(hex);
+        chip.classList.add("chipAlpha");
+        chip.style.background = "linear-gradient(rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + "," + alpha + "), rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + "," + alpha + ")), " + CHECKERBOARD_DATA_URI;
+      } else {
+        chip.classList.remove("chipAlpha");
+        chip.style.background = "#" + (hex || "000").replace(/^#/, "");
+      }
+    }
+
+    function noMatchKey(it){ return it.hex + "|" + (it.alpha ?? 1); }
 
     // ---------- helpers ----------
     const $ = (id) => document.getElementById(id);
@@ -495,6 +540,24 @@
       state.mode = mode;
       $("modeLight").classList.toggle("on", mode === "Light");
       $("modeDark").classList.toggle("on", mode === "Dark");
+    }
+
+    function updateModeRow(){
+      const modes = state.availableModes || [];
+      const wrap = $("modeRowWrap");
+      if (modes.length === 0) {
+        wrap.style.display = "none";
+        return;
+      }
+      wrap.style.display = "";
+      const lower = modes.map(function(m){ return (m || "").toLowerCase(); });
+      $("modeLight").style.display = lower.indexOf("light") !== -1 ? "" : "none";
+      $("modeDark").style.display = lower.indexOf("dark") !== -1 ? "" : "none";
+      const stateLower = (state.mode || "").toLowerCase();
+      if (lower.indexOf(stateLower) === -1) {
+        state.mode = modes[0];
+        setMode(state.mode);
+      }
     }
 
     function emptyRow(text){
@@ -522,14 +585,14 @@
 
         const chip = document.createElement("div");
         chip.className = "chip";
-        chip.style.background = "#" + it.hex;
+        setChipStyle(chip, it.hex, it.alpha);
 
         const rowText = document.createElement("div");
         rowText.className = "rowText";
 
         const hex = document.createElement("div");
         hex.className = "mono hex";
-        hex.textContent = it.hex.toUpperCase();
+        hex.textContent = formatHexDisplay(it.hex, it.alpha);
 
         const token = document.createElement("div");
         token.className = "mono token";
@@ -559,23 +622,27 @@
       }
 
       for (const it of state.noMatchColors){
+        const key = noMatchKey(it);
         const wrap = document.createElement("div");
         wrap.className = "noMatchRowWrap";
 
         const row = document.createElement("div");
         row.className = "item clickable";
-        if (state.expandedNoMatchHex === it.hex) row.classList.add("selected");
+        if (state.expandedNoMatchKey === key) row.classList.add("selected");
 
         const chip = document.createElement("div");
         chip.className = "chip";
-        chip.style.background = "#" + it.hex;
+        setChipStyle(chip, it.hex, it.alpha);
 
         const rowText = document.createElement("div");
         rowText.className = "rowText";
 
         const hex = document.createElement("div");
-        hex.className = "mono hex";
-        hex.textContent = it.hex.toUpperCase();
+        const applied = state.appliedNoMatchMap[key];
+        hex.className = applied ? "mono hex hexApplied" : "mono hex";
+        hex.textContent = applied
+          ? formatHexDisplay(it.hex, it.alpha) + " → " + (applied.name || "—") + " (" + (applied.hex || "").toUpperCase() + ")"
+          : formatHexDisplay(it.hex, it.alpha);
 
         rowText.appendChild(hex);
 
@@ -588,19 +655,20 @@
         row.appendChild(count);
 
         row.onclick = () => {
-          if (state.expandedNoMatchHex === it.hex) {
-            state.expandedNoMatchHex = null;
+          if (state.expandedNoMatchKey === key) {
+            state.expandedNoMatchKey = null;
           } else {
-            state.expandedNoMatchHex = it.hex;
-            if (!state.suggestionsCache[it.hex]) {
-              state.loadingSuggestionsHex = it.hex;
+            state.expandedNoMatchKey = key;
+            if (!state.suggestionsCache[key]) {
+              state.loadingSuggestionsKey = key;
+              syncSelectedGroupsFromCheckboxes();
               parent.postMessage({
                 pluginMessage: {
                   type: "getSuggestions",
                   hex: it.hex,
                   mode: state.mode,
                   collection: state.collection,
-                  useGroupFilters: state.useGroupFilters
+                  groupPrefixes: getSelectedGroupPrefixes()
                 }
               }, "*");
             }
@@ -610,13 +678,13 @@
 
         const inlineCandidates = document.createElement("div");
         inlineCandidates.className = "inlineCandidates";
-        inlineCandidates.style.display = state.expandedNoMatchHex === it.hex ? "block" : "none";
+        inlineCandidates.style.display = state.expandedNoMatchKey === key ? "block" : "none";
 
-        if (state.expandedNoMatchHex === it.hex) {
-          if (state.loadingSuggestionsHex === it.hex && !state.suggestionsCache[it.hex]) {
+        if (state.expandedNoMatchKey === key) {
+          if (state.loadingSuggestionsKey === key && !state.suggestionsCache[key]) {
             inlineCandidates.appendChild(emptyRow("Loading..."));
-          } else if (state.suggestionsCache[it.hex]) {
-            const items = state.suggestionsCache[it.hex];
+          } else if (state.suggestionsCache[key]) {
+            const items = state.suggestionsCache[key];
             if (!items.length) {
               inlineCandidates.appendChild(emptyRow("No candidates found"));
             } else {
@@ -626,7 +694,7 @@
 
                 const itemChip = document.createElement("div");
                 itemChip.className = "chip";
-                itemChip.style.background = "#" + (s.hex || "000");
+                setChipStyle(itemChip, s.hex, s.alpha);
 
                 const itemRowText = document.createElement("div");
                 itemRowText.className = "rowText";
@@ -637,7 +705,7 @@
 
                 const itemHex = document.createElement("div");
                 itemHex.className = "mono hex";
-                itemHex.textContent = (s.hex || "").toUpperCase();
+                itemHex.textContent = formatHexDisplay(s.hex, s.alpha);
 
                 itemRowText.appendChild(itemName);
                 itemRowText.appendChild(itemHex);
@@ -647,8 +715,9 @@
 
                 itemRow.onclick = (e) => {
                   e.stopPropagation();
+                  state.pendingApply = { key: key, hex: it.hex, alpha: it.alpha, name: s.name || "", tokenHex: s.hex || "" };
                   parent.postMessage({
-                    pluginMessage: { type: "applyTokenToColor", hex: it.hex, variableId: s.variableId }
+                    pluginMessage: { type: "applyTokenToColor", hex: it.hex, variableId: s.variableId, alpha: it.alpha }
                   }, "*");
                 };
                 inlineCandidates.appendChild(itemRow);
@@ -670,25 +739,62 @@
       renderNoMatch();
     }
 
+    function getSelectedGroupPrefixes(){
+      if (!state.hasGroups || !state.selectedGroups.length) return null;
+      return state.selectedGroups.map(function(g){ return g + "/"; });
+    }
+
+    function syncSelectedGroupsFromCheckboxes(){
+      const list = $("groupList");
+      state.selectedGroups = [];
+      list.querySelectorAll("input[type=checkbox]:checked").forEach(function(cb){
+        const g = cb.getAttribute("data-group");
+        if (g) state.selectedGroups.push(g);
+      });
+    }
+
+    function updateGroupCheckboxes(){
+      const list = $("groupList");
+      list.innerHTML = "";
+      for (const g of state.groups) {
+        const label = document.createElement("label");
+        label.className = "check";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.setAttribute("data-group", g);
+        if (state.selectedGroups.indexOf(g) !== -1) input.checked = true;
+        input.addEventListener("change", function(){ syncSelectedGroupsFromCheckboxes(); });
+        const span = document.createElement("span");
+        span.textContent = g;
+        label.appendChild(input);
+        label.appendChild(span);
+        list.appendChild(label);
+      }
+    }
+
+    function showGroupRow(show){
+      $("groupRowWrap").style.display = show ? "" : "none";
+      state.hasGroups = show;
+      if (!show) state.groups = [];
+    }
+
     // ---------- UI events ----------
     $("collection").addEventListener("change", (e) => {
       state.collection = e.target.value;
-    });
-
-    $("useGroupFilters").addEventListener("change", (e) => {
-      state.useGroupFilters = e.target.checked;
+      parent.postMessage({ pluginMessage: { type: "getGroups", collection: state.collection } }, "*");
     });
 
     $("modeLight").addEventListener("click", () => setMode("Light"));
     $("modeDark").addEventListener("click", () => setMode("Dark"));
 
     $("scanBtn").addEventListener("click", () => {
+      syncSelectedGroupsFromCheckboxes();
       parent.postMessage({
         pluginMessage: {
           type: "scan",
           mode: state.mode,
           collection: state.collection,
-          useGroupFilters: state.useGroupFilters
+          groupPrefixes: getSelectedGroupPrefixes()
         }
       }, "*");
     });
@@ -707,32 +813,81 @@
       if (msg.type === "scanUI") {
         state.matchedColors = msg.matchedColors || [];
         state.noMatchColors = msg.noMatchColors || [];
-        if (state.expandedNoMatchHex && !state.noMatchColors.some(x => x.hex === state.expandedNoMatchHex)) {
-          state.expandedNoMatchHex = null;
+        state.appliedNoMatchMap = {};
+        if (state.expandedNoMatchKey && !state.noMatchColors.some(function(x){ return noMatchKey(x) === state.expandedNoMatchKey; })) {
+          state.expandedNoMatchKey = null;
         }
         renderAll();
         return;
       }
 
-      if (msg.type === "suggestions") {
-        // { type:"suggestions", hex:"FF5733", items:[{variableId,name,hex}, ...] }
-        if (msg.hex != null) {
-          state.suggestionsCache[msg.hex] = msg.items || [];
+      if (msg.type === "applyTokenToColorResult") {
+        if (msg.appliedCount > 0 && state.pendingApply && state.pendingApply.key) {
+          state.appliedNoMatchMap[state.pendingApply.key] = {
+            name: state.pendingApply.name,
+            hex: state.pendingApply.tokenHex
+          };
+          state.pendingApply = null;
+          renderNoMatch();
+        } else {
+          state.pendingApply = null;
         }
-        state.loadingSuggestionsHex = null;
+        return;
+      }
+
+      if (msg.type === "suggestions") {
+        if (state.loadingSuggestionsKey != null) {
+          state.suggestionsCache[state.loadingSuggestionsKey] = msg.items || [];
+        }
+        state.loadingSuggestionsKey = null;
         renderNoMatch();
         return;
       }
 
+      if (msg.type === "collections") {
+        const sel = $("collection");
+        sel.innerHTML = "";
+        const names = msg.collectionNames || [];
+        for (const name of names) {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          sel.appendChild(opt);
+        }
+        state.collection = names.length ? names[0] : "";
+        if (state.collection) {
+          parent.postMessage({ pluginMessage: { type: "getGroups", collection: state.collection } }, "*");
+        } else {
+          showGroupRow(false);
+          state.availableModes = [];
+          updateModeRow();
+        }
+        return;
+      }
+
+      if (msg.type === "groups") {
+        const groups = msg.groups || [];
+        state.availableModes = msg.modes || [];
+        if (groups.length > 0) {
+          state.groups = groups;
+          state.selectedGroups = [];
+          updateGroupCheckboxes();
+          showGroupRow(true);
+        } else {
+          showGroupRow(false);
+        }
+        updateModeRow();
+        return;
+      }
+
       if (msg.type === "toast") {
-        // optional helper: { type:"toast", message:"..." }
-        // Here we keep it simple (no toast UI).
         return;
       }
     };
 
-    // initial mode
+    state.mode = "Light";
     setMode("Light");
+    parent.postMessage({ pluginMessage: { type: "getCollections" } }, "*");
   </script>
 </body>
 </html>
