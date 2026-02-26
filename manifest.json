@@ -1,6 +1,6 @@
 {
-  "name": "Variable Color Auto Binder",
-  "id": "variable-color-auto-binder",
+  "name": "Hex to Token",
+  "id": "1608438585405768582",
   "api": "1.0.0",
   "editorType": ["figma"],
   "main": "dist/code.js",

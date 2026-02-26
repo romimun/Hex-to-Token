@@ -73,11 +73,11 @@
     .form{
       display:flex;
       flex-direction:column;
-      gap: 14px;
+      gap: 16px;
     }
 
      #groupList{
-   gap: 6px;
+   gap: 10px;
     }
 
     .row{
@@ -88,11 +88,11 @@
     }
 
     .label{
-      width: 100px;
-      font-weight: 400;
+      width: 100px;      
+      font-weight: 600;
       font-size: 12px;
       line-height: 16px;
-      color: var(--text);
+      color: #6A7282;
     }
 
     select.select{
@@ -159,6 +159,46 @@
       font-weight: 500;
       font-size: 12px;
       line-height: 16px;
+    }
+
+    #groupList .check{
+      position: relative;
+    }
+    #groupList .check input{
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      opacity: 0;
+      cursor: pointer;
+      z-index: 1;
+    }
+    #groupList .check .group-checkbox-box{
+      width: 18px;
+      height: 18px;
+      min-width: 18px;
+      min-height: 18px;
+      border: 2px solid var(--line);
+      border-radius: 4px;
+      background: var(--bg);
+      position: relative;
+      flex-shrink: 0;
+    }
+    #groupList .check input:checked ~ .group-checkbox-box{
+      border-color: var(--text);
+      background: var(--text);
+      color: #fff;
+    }
+    #groupList .check .group-checkbox-box svg{
+      display: none;
+      position: absolute;
+      left: 2;
+      top: 2;
+      width: 65%;
+      height: 65%;
+    }
+    #groupList .check input:checked ~ .group-checkbox-box svg{
+      display: block;
     }
 
     .divider{
@@ -533,6 +573,20 @@
 
     function noMatchKey(it){ return it.hex + "|" + (it.alpha ?? 1); }
 
+    function createCheckSvg(){
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 12 10");
+      svg.setAttribute("fill", "none");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "M 2 6 L 5 9 L 10 2");
+      path.setAttribute("stroke", "currentColor");
+      path.setAttribute("stroke-width", "3");
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      svg.appendChild(path);
+      return svg;
+    }
+
     // ---------- helpers ----------
     const $ = (id) => document.getElementById(id);
 
@@ -550,11 +604,9 @@
         return;
       }
       wrap.style.display = "";
-      const lower = modes.map(function(m){ return (m || "").toLowerCase(); });
-      $("modeLight").style.display = lower.indexOf("light") !== -1 ? "" : "none";
-      $("modeDark").style.display = lower.indexOf("dark") !== -1 ? "" : "none";
-      const stateLower = (state.mode || "").toLowerCase();
-      if (lower.indexOf(stateLower) === -1) {
+      $("modeLight").style.display = modes.indexOf("Light") !== -1 ? "" : "none";
+      $("modeDark").style.display = modes.indexOf("Dark") !== -1 ? "" : "none";
+      if (modes.indexOf(state.mode) === -1) {
         state.mode = modes[0];
         setMode(state.mode);
       }
@@ -749,13 +801,45 @@
       state.selectedGroups = [];
       list.querySelectorAll("input[type=checkbox]:checked").forEach(function(cb){
         const g = cb.getAttribute("data-group");
-        if (g) state.selectedGroups.push(g);
+        if (g && g !== "__all__") state.selectedGroups.push(g);
       });
+      const allCb = list.querySelector("input[data-group=\"__all__\"]");
+      if (allCb) allCb.checked = state.groups.length > 0 && state.selectedGroups.length === state.groups.length;
     }
 
     function updateGroupCheckboxes(){
       const list = $("groupList");
       list.innerHTML = "";
+
+      const allLabel = document.createElement("label");
+      allLabel.className = "check";
+      const allInput = document.createElement("input");
+      allInput.type = "checkbox";
+      allInput.setAttribute("data-group", "__all__");
+      allInput.checked = state.groups.length > 0 && state.selectedGroups.length === state.groups.length;
+      allInput.addEventListener("change", function(){
+        if (allInput.checked) {
+          state.selectedGroups = state.groups.slice();
+          list.querySelectorAll("input[type=checkbox][data-group]").forEach(function(cb){
+            if (cb.getAttribute("data-group") !== "__all__") cb.checked = true;
+          });
+        } else {
+          state.selectedGroups = [];
+          list.querySelectorAll("input[type=checkbox][data-group]").forEach(function(cb){
+            if (cb.getAttribute("data-group") !== "__all__") cb.checked = false;
+          });
+        }
+      });
+      const allBox = document.createElement("span");
+      allBox.className = "group-checkbox-box";
+      allBox.appendChild(createCheckSvg());
+      const allSpan = document.createElement("span");
+      allSpan.textContent = "All";
+      allLabel.appendChild(allInput);
+      allLabel.appendChild(allBox);
+      allLabel.appendChild(allSpan);
+      list.appendChild(allLabel);
+
       for (const g of state.groups) {
         const label = document.createElement("label");
         label.className = "check";
@@ -764,9 +848,13 @@
         input.setAttribute("data-group", g);
         if (state.selectedGroups.indexOf(g) !== -1) input.checked = true;
         input.addEventListener("change", function(){ syncSelectedGroupsFromCheckboxes(); });
+        const box = document.createElement("span");
+        box.className = "group-checkbox-box";
+        box.appendChild(createCheckSvg());
         const span = document.createElement("span");
         span.textContent = g;
         label.appendChild(input);
+        label.appendChild(box);
         label.appendChild(span);
         list.appendChild(label);
       }
@@ -885,7 +973,6 @@
       }
     };
 
-    state.mode = "Light";
     setMode("Light");
     parent.postMessage({ pluginMessage: { type: "getCollections" } }, "*");
   </script>
